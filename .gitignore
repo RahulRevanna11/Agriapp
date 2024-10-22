@@ -1,0 +1,6 @@
+node_modules
+__pycache__git
+build
+fertilizer_calculator.py.egg-info
+.env
+__pycache__

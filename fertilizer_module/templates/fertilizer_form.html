@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fertilizer Requirement Calculator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>Fertilizer Calculator</h1>
+        <form action="/" method="POST">
+            <label for="crop_name">Crop Name:</label>
+            <input type="text" id="crop_name" name="crop_name" placeholder="Enter crop name" required>
+
+            <label for="soil_n">Soil Nitrogen (N):</label>
+            <input type="number" id="soil_n" name="soil_n" placeholder="Enter soil nitrogen (kg/ha)" required>
+
+            <label for="soil_p">Soil Phosphorus (P):</label>
+            <input type="number" id="soil_p" name="soil_p" placeholder="Enter soil phosphorus (kg/ha)" required>
+
+            <label for="soil_k">Soil Potassium (K):</label>
+            <input type="number" id="soil_k" name="soil_k" placeholder="Enter soil potassium (kg/ha)" required>
+
+            <button type="submit">Calculate</button>
+        </form>
+    </div>
+</body>
+</html>

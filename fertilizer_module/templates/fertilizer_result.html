@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fertilizer Plan Result</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>Fertilizer Plan for {{ crop_name }}</h1>
+        <div class="success-message">Here’s your customized fertilizer plan based on the soil data provided.</div>
+
+        <p><strong>Soil Nitrogen (N):</strong> {{ soil_n }} kg/ha</p>
+        <p><strong>Soil Phosphorus (P):</strong> {{ soil_p }} kg/ha</p>
+        <p><strong>Soil Potassium (K):</strong> {{ soil_k }} kg/ha</p>
+
+        <h2>Fertilizer Plan by Growth Phases</h2>
+        <table class="result-table">
+            <thead>
+                <tr>
+                    <th>Phase</th>
+                    <th>Days</th>
+                    <th>N Fertilizer (kg/ha)</th>
+                    <th>P Fertilizer (kg/ha)</th>
+                    <th>K Fertilizer (kg/ha)</th>
+                    <th>Specific Fertilizer Amounts</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for phase in fertilizer_plan %}
+                <tr>
+                    <td>{{ phase['phase'] }}</td>
+                    <td>{{ phase['days'][0] }} - {{ phase['days'][1] }}</td>
+                    <td>{{ phase['n_fertilizer_needed'] }}</td>
+                    <td>{{ phase['p_fertilizer_needed'] }}</td>
+                    <td>{{ phase['k_fertilizer_needed'] }}</td>
+                    <td>
+                        <ul>
+                        {% for fertilizer, amount in phase['specific_fertilizer_amounts'].items() %}
+                            <li>{{ fertilizer }}: {{ amount }} kg/ha</li>
+                        {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
