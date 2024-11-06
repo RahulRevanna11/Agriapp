@@ -45,16 +45,21 @@
 #     app.run(debug=True)
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from fertilizer_calculator import NPKComplexFertilizerCalculator
+from fertilizer_calculator import NPKComplexFertilizerCalculator_sugarcane
+from fertilizer_calculator import NPKComplexFertilizerCalculator_grapes
+from fertilizer_calculator import NPKComplexFertilizerCalculator_maize
+from fertilizer_calculator import NPKComplexFertilizerCalculator_rice
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
+crops=['sugarcane','grape','maize','rice']
 
 # Define a function to calculate the fertilizer plan
 def calculate_fertilizer_plan(crop_name, soil_n, soil_p, soil_k):
-    calculator = NPKComplexFertilizerCalculator(crop_name, soil_n, soil_p, soil_k)
+    calculator = NPKComplexFertilizerCalculator_sugarcane(crop_name, soil_n, soil_p, soil_k)
     fertilizer_plan = calculator.display_fertilizer_plan()
     return fertilizer_plan
+
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -62,12 +67,33 @@ def index():
         # Get data from the request
         data = request.get_json()
         crop_name = data.get('crop_name')
+        if(crop_name not in crops):
+            return jsonify({"message": "not valid "})
         soil_n = int(data.get('soil_n', 0))
         soil_p = int(data.get('soil_p', 0))
         soil_k = int(data.get('soil_k', 0))
 
         # Calculate the fertilizer plan
-        fertilizer_plan = calculate_fertilizer_plan(crop_name, soil_n, soil_p, soil_k)
+        global calculator
+        global fertilizer_plan
+        
+        if( crop_name=='sugarcane'):
+           calculator = NPKComplexFertilizerCalculator_sugarcane(crop_name, soil_n, soil_p, soil_k)
+           fertilizer_plan = calculator.display_fertilizer_plan()
+        elif crop_name=='grape':
+           calculator = NPKComplexFertilizerCalculator_grapes(crop_name, soil_n, soil_p, soil_k,biofertilizer=True)
+           fertilizer_plan = calculator.display_fertilizer_plan()
+           print(fertilizer_plan)
+        elif crop_name=='maize':
+              calculator = NPKComplexFertilizerCalculator_maize(crop_name, soil_n, soil_p, soil_k,biofertilizer=True)
+
+              fertilizer_plan = calculator.display_fertilizer_plan()
+        elif crop_name=='rice':
+              calculator = NPKComplexFertilizerCalculator_rice(crop_name, soil_n, soil_p, soil_k,biofertilizer=True)
+
+              fertilizer_plan = calculator.display_fertilizer_plan()
+              
+        
 
         # Return the fertilizer plan as JSON response
         return jsonify({
@@ -82,4 +108,4 @@ def index():
     return jsonify({"message": "Welcome to the Fertilizer Calculator API. Please send a POST request with your data."})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True,port=5000)
