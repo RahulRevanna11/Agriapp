@@ -530,34 +530,30 @@ import skfuzzy as fuzz
 from skfuzzy import control as ctrl
 
 class NPKComplexFertilizerCalculator_sugarcane:
-    def __init__(self, crop_name, soil_n, soil_p, soil_k, biofertilizer=False):
+    def __init__(self, crop_name, soil_n,soil_p,soil_k):
         self.crop_name = crop_name  # Name of the crop
-        self.soil_n = soil_n  # Current Nitrogen level (kg/ha)
-        self.soil_p = soil_p  # Current Phosphorus level (kg/ha)
-        self.soil_k = soil_k  # Current Potassium level (kg/ha)
-        self.biofertilizer = biofertilizer  # Whether biofertilizer is used
+        self.soil_n=soil_n
+        self.soil_p=soil_p
+        self.soil_k = soil_k  # Current NPK ratio in the soil
+        self.ideal_soil_n, self.ideal_soil_p, self.ideal_soil_k = (1.0, 0.067, 0.25 ) # Ideal NPK ratio in the soil
 
-        # Recommended NPK for sugarcane from your data
-        self.crop_n_needs = 300  # Recommended Nitrogen (kg/ha)
-        self.crop_p_needs = 100  # Recommended Phosphorus (kg/ha)
-        self.crop_k_needs = 200  # Recommended Potassium (kg/ha)
-
-        # If biofertilizer is used, reduce nitrogen by 25%
-        if self.biofertilizer:
-            self.crop_n_needs *= 0.75
+        # Calculate the recommended NPK needs based on the difference between the current and ideal soil NPK levels
+        self.crop_n_needs = self.ideal_soil_n * (1 - (self.soil_n / self.ideal_soil_n))
+        self.crop_p_needs = self.ideal_soil_p * (1 - (self.soil_p / self.ideal_soil_p))
+        self.crop_k_needs = self.ideal_soil_k * (1 - (self.soil_k / self.ideal_soil_k))
 
         # Initialize fuzzy variables
         self._initialize_fuzzy_system()
 
-        # Growth stages with fertilizer recommendations
+        # Growth stages with fertilizer recommendations for sugarcane
         self.growth_stages = {
-            "Germination": {"days": (0, 40), "NPK": (100, 33, 66), "biofertilizer": True},  # Organic + Biofertilizer
-            "Tillering": {"days": (41, 135), "NPK": (100, 33, 66), "biofertilizer": True},  # Biofertilizer
-            "Grand Growth": {"days": (136, 300), "NPK": (100, 34, 68), "biofertilizer": True},
-            "Maturity": {"days": (301, 360), "NPK": (0, 0, 0)},  # No additional fertilizer
-            "Harvesting": {"days": (360, 400), "NPK": (0, 0, 0)}   # No additional fertilizer
+            "Planting": {"days": (0, 30), "NPK_ratio": (20, 40, 10), "biofertilizer": True},
+            "Tillering": {"days": (31, 90), "NPK_ratio": (100, 30, 50), "biofertilizer": True},
+            "Grand Growth": {"days": (91, 210), "NPK_ratio": (100, 35, 55), "biofertilizer": True},
+            "Maturity": {"days": (211, 365), "NPK_ratio": (20, 20, 30)},
+            "Harvesting": {"days": (366, 380), "NPK_ratio": (10, 50, 10)}
         }
-
+        
         # NPK complex fertilizers and individual fertilizers
         self.fertilizers = {
             "10:26:26": {"N": 0.10, "P": 0.26, "K": 0.26},
@@ -639,10 +635,15 @@ class NPKComplexFertilizerCalculator_sugarcane:
         p_needed = max(0, p_needed_target - self.soil_p)
         k_needed = max(0, k_needed_target - self.soil_k)
 
+        # Adjust the NPK needs based on the difference between the current and ideal soil NPK levels
+        n_fertilizer_needed = n_needed * (1 - (self.soil_n / self.ideal_soil_n))
+        p_fertilizer_needed = p_needed * (1 - (self.soil_p / self.ideal_soil_p))
+        k_fertilizer_needed = k_needed * (1 - (self.soil_k / self.ideal_soil_k))
+
         # Set inputs to the fuzzy logic system
-        self.fertilizer_sim.input['n_needed'] = n_needed
-        self.fertilizer_sim.input['p_needed'] = p_needed
-        self.fertilizer_sim.input['k_needed'] = k_needed
+        self.fertilizer_sim.input['n_needed'] = n_fertilizer_needed
+        self.fertilizer_sim.input['p_needed'] = p_fertilizer_needed
+        self.fertilizer_sim.input['k_needed'] = k_fertilizer_needed
 
         # Compute the fuzzy logic output
         self.fertilizer_sim.compute()
@@ -656,89 +657,93 @@ class NPKComplexFertilizerCalculator_sugarcane:
 
     def get_npk_needs(self, growth_stage):
         # Get the NPK needs based on the growth stage
-        return self.growth_stages[growth_stage]['NPK']
+        n_ratio, p_ratio, k_ratio = self.growth_stages[growth_stage]['NPK_ratio']
+        return n_ratio, p_ratio, k_ratio
 
     def calculate_fertilizer_amounts(self, n_fertilizer_needed, p_fertilizer_needed, k_fertilizer_needed):
-           amounts = {}
-           total_n_applied = total_p_applied = total_k_applied = 0
-       
-           # Count available fertilizers with N, P, and K to distribute evenly
-           n_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["N"] > 0]
-           p_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["P"] > 0]
-           k_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["K"] > 0]
-           
-           # Distribute N evenly across all nitrogen-heavy and balanced fertilizers
-           for fertilizer in n_fertilizers:
-               n_content = self.fertilizers[fertilizer]["N"]
-               n_share = n_fertilizer_needed / len(n_fertilizers)  # Split nitrogen need evenly
-               n_amount = n_share / n_content if n_content > 0 else 0
-               amounts[fertilizer] = amounts.get(fertilizer, 0) + n_amount
-               total_n_applied += n_amount * n_content
-       
-           # Distribute P evenly across all phosphorus-heavy and balanced fertilizers
-           for fertilizer in p_fertilizers:
-               p_content = self.fertilizers[fertilizer]["P"]
-               p_share = p_fertilizer_needed / len(p_fertilizers)  # Split phosphorus need evenly
-               p_amount = p_share / p_content if p_content > 0 else 0
-               amounts[fertilizer] = amounts.get(fertilizer, 0) + p_amount
-               total_p_applied += p_amount * p_content
-       
-           # Distribute K evenly across all potassium-heavy and balanced fertilizers
-           for fertilizer in k_fertilizers:
-               k_content = self.fertilizers[fertilizer]["K"]
-               k_share = k_fertilizer_needed / len(k_fertilizers)  # Split potassium need evenly
-               k_amount = k_share / k_content if k_content > 0 else 0
-               amounts[fertilizer] = amounts.get(fertilizer, 0) + k_amount
-               total_k_applied += k_amount * k_content
-       
-           # Rebalance amounts across all fertilizers
-           return amounts
-       
-# # Example of the update in action:
-# calculator = NPKComplexFertilizerCalculator_sugarcane(
-#     crop_name="Sugarcane", soil_n=500, soil_p=20, soil_k=30, biofertilizer=True
-# )
-# calculator.display_fertilizer_plan()
+        amounts = {}
+        total_n_applied = total_p_applied = total_k_applied = 0
 
-      
+        # Count available fertilizers with N, P, and K to distribute evenly
+        n_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["N"] > 0]
+        p_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["P"] > 0]
+        k_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["K"] > 0]
 
+        # Distribute N evenly across all nitrogen-heavy and balanced fertilizers
+        for fertilizer in n_fertilizers:
+            n_content = self.fertilizers[fertilizer]["N"]
+            n_share = n_fertilizer_needed / len(n_fertilizers)  # Split nitrogen need evenly
+            n_amount = n_share / n_content if n_content > 0 else 0
+            amounts[fertilizer] = amounts.get(fertilizer, 0) + n_amount
+            total_n_applied += n_amount * n_content
+
+        # Distribute P evenly across all phosphorus-heavy and balanced fertilizers
+        for fertilizer in p_fertilizers:
+            p_content = self.fertilizers[fertilizer]["P"]
+            p_share = p_fertilizer_needed / len(p_fertilizers)  # Split phosphorus need evenly
+            p_amount = p_share / p_content if p_content > 0 else 0
+            amounts[fertilizer] = amounts.get(fertilizer, 0) + p_amount
+            total_p_applied += p_amount * p_content
+
+        # Distribute K evenly across all potassium-heavy and balanced fertilizers
+        for fertilizer in k_fertilizers:
+            k_content = self.fertilizers[fertilizer]["K"]
+            k_share = k_fertilizer_needed / len(k_fertilizers)  # Split potassium need evenly
+            k_amount = k_share / k_content if k_content > 0 else 0
+            amounts[fertilizer] = amounts.get(fertilizer, 0) + k_amount
+            total_k_applied += k_amount * k_content
+
+        # Rebalance amounts across all fertilizers
+        return amounts
 
     def display_fertilizer_plan(self):
-        # Initialize a list to store fertilizer plans for each growth stage
-        fertilizer_plan_list = []
-
-        print(f"\nFertilizer plan for {self.crop_name}:")
-        for phase, stage_data in self.growth_stages.items():
-            # Get fertilizer amounts using fuzzy logic
-            n_fertilizer, p_fertilizer, k_fertilizer = self.fuzzy_logic(phase)
-            fertilizer_amounts = self.calculate_fertilizer_amounts(n_fertilizer, p_fertilizer, k_fertilizer)
-
-            # Display the data
-            print(f"{phase} (Days: {stage_data['days'][0]} to {stage_data['days'][1]}):")
-            print(f"  N fertilizer needed: {n_fertilizer:.2f} kg/ha")
-            print(f"  P fertilizer needed: {p_fertilizer:.2f} kg/ha")
-            print(f"  K fertilizer needed: {k_fertilizer:.2f} kg/ha")
-
-            for fertilizer, amount in fertilizer_amounts.items():
-                print(f"    {fertilizer}: {amount:.2f} kg/ha")
-
-            print()
-
-            # Store the data for this phase in a dictionary
-            phase_data = {
-                'phase': phase,
-                'days': stage_data['days'],
-                'n_fertilizer_needed': n_fertilizer,
-                'p_fertilizer_needed': p_fertilizer,
-                'k_fertilizer_needed': k_fertilizer,
-                'specific_fertilizer_amounts': fertilizer_amounts  # Dictionary with the specific fertilizer amounts
-            }
-
-            # Append the dictionary to the list
-            fertilizer_plan_list.append(phase_data)
-
-        # Return the list containing all phases' data
-        return fertilizer_plan_list
+    # Initialize a list to store fertilizer plans for each growth stage
+         fertilizer_plan_list = []
+     
+         print(f"\nFertilizer plan for {self.crop_name}:")
+         for phase, stage_data in self.growth_stages.items():
+             # Get fertilizer amounts using fuzzy logic
+             n_fertilizer, p_fertilizer, k_fertilizer = self.fuzzy_logic(phase)
+             fertilizer_amounts = self.calculate_fertilizer_amounts(n_fertilizer, p_fertilizer, k_fertilizer)
+     
+             # Display the data
+             print(f"{phase} (Days: {stage_data['days'][0]} to {stage_data['days'][1]}):")
+             print(f"  N fertilizer ratio: {stage_data['NPK_ratio'][0]}%")
+             print(f"  P fertilizer ratio: {stage_data['NPK_ratio'][1]}%")
+             print(f"  K fertilizer ratio: {stage_data['NPK_ratio'][2]}%")
+     
+             # Check if any fertilizer is needed
+             if stage_data['NPK_ratio'][0] > 0 or stage_data['NPK_ratio'][1] > 0 or stage_data['NPK_ratio'][2] > 0:
+                 print(f"  N fertilizer needed: {n_fertilizer:.2f} kg/ha")
+                 print(f"  P fertilizer needed: {p_fertilizer:.2f} kg/ha")
+                 print(f"  K fertilizer needed: {k_fertilizer:.2f} kg/ha")
+     
+                 for fertilizer, amount in fertilizer_amounts.items():
+                     print(f"    {fertilizer}: {amount:.2f} kg/ha")
+             else:
+                 print("  No fertilizer required.")
+     
+             print()
+     
+             # Store the data for this phase in a dictionary
+             phase_data = {
+                 'phase': phase,
+                 'days': stage_data['days'],
+                 'n_fertilizer_needed': n_fertilizer,
+                 'p_fertilizer_needed': p_fertilizer,
+                 'k_fertilizer_needed': k_fertilizer,
+                 'specific_fertilizer_amounts': fertilizer_amounts  # Dictionary with the specific fertilizer amounts
+             }
+     
+             # Append the dictionary to the list, even if no fertilizer is required
+             fertilizer_plan_list.append(phase_data)
+         print(fertilizer_plan_list)
+         # Return the list containing all phases' data
+         return fertilizer_plan_list
+     
+     
+     
+     
 
 
 
@@ -1000,8 +1005,6 @@ class NPKComplexFertilizerCalculator_grapes:
 calculator = NPKComplexFertilizerCalculator_grapes(
     crop_name="Maize", soil_n=40, soil_p=15, soil_k=20, biofertilizer=True
 )
-# calculator.display_fertilizer_plan()
-            # Store the data for this
 
 class NPKComplexFertilizerCalculator_maize:
     def __init__(self, crop_name, soil_n, soil_p, soil_k, biofertilizer=False):

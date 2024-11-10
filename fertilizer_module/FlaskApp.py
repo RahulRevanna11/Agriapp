@@ -69,9 +69,9 @@ def index():
         crop_name = data.get('crop_name')
         if(crop_name not in crops):
             return jsonify({"message": "not valid "})
-        soil_n = int(data.get('soil_n', 0))
-        soil_p = int(data.get('soil_p', 0))
-        soil_k = int(data.get('soil_k', 0))
+        soil_n = float(data.get('soil_n', 0))
+        soil_p = float(data.get('soil_p', 0))
+        soil_k = float(data.get('soil_k', 0))
 
         # Calculate the fertilizer plan
         global calculator
@@ -79,9 +79,14 @@ def index():
         
         if( crop_name=='sugarcane'):
            calculator = NPKComplexFertilizerCalculator_sugarcane(crop_name, soil_n, soil_p, soil_k)
+           print(crop_name)
+           print(soil_n)
+           print(soil_p)
+           print(soil_k)
+
            fertilizer_plan = calculator.display_fertilizer_plan()
         elif crop_name=='grape':
-           calculator = NPKComplexFertilizerCalculator_grapes(crop_name, soil_n, soil_p, soil_k,biofertilizer=True)
+           calculator = NPKComplexFertilizerCalculator_grapes(crop_name, soil_n, soil_p, soil_k)
            fertilizer_plan = calculator.display_fertilizer_plan()
            print(fertilizer_plan)
         elif crop_name=='maize':

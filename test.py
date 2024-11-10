@@ -1,126 +1,219 @@
-import requests
-from math import exp
-from datetime import datetime, timedelta
-import asyncio
-import aiohttp
-from typing import List, Dict
-import pandas as pd
 import numpy as np
-import nest_asyncio
+import skfuzzy as fuzz
+from skfuzzy import control as ctrl
 
-# Enable nested event loops (needed for Jupyter/IPython)
-nest_asyncio.apply()
+class NPKComplexFertilizerCalculator:
+    def __init__(self, crop_name, soil_npk_ratio, ideal_soil_npk_ratio):
+        self.crop_name = crop_name  # Name of the crop
+        self.soil_n, self.soil_p, self.soil_k = soil_npk_ratio  # Current NPK ratio in the soil
+        self.ideal_soil_n, self.ideal_soil_p, self.ideal_soil_k = ideal_soil_npk_ratio  # Ideal NPK ratio in the soil
 
-# Constants remain the same
-Cn = 900
-Cd = 0.34
-Kc = 1.15
-Eff = 0.85
-LOCATION = "Sangli"
-API_KEY = "9e2f039c7cfb45498bb123017241910"
+        # Calculate the recommended NPK needs based on the difference between the current and ideal soil NPK levels
+        self.crop_n_needs = self.ideal_soil_n * (1 - (self.soil_n / self.ideal_soil_n))
+        self.crop_p_needs = self.ideal_soil_p * (1 - (self.soil_p / self.ideal_soil_p))
+        self.crop_k_needs = self.ideal_soil_k * (1 - (self.soil_k / self.ideal_soil_k))
 
-async def fetch_weather_data_batch(session: aiohttp.ClientSession, location: str, dates: List[str]) -> List[Dict]:
-    """Fetch weather data for multiple dates in parallel"""
-    async def fetch_single_date(date: str):
-        url = f"http://api.weatherapi.com/v1/history.json?key={API_KEY}&q={location}&dt={date}"
-        async with session.get(url) as response:
-            return await response.json()
-    
-    # Create tasks for all dates
-    tasks = [fetch_single_date(date) for date in dates]
-    return await asyncio.gather(*tasks)
+        # Initialize fuzzy variables
+        self._initialize_fuzzy_system()
 
-def calculate_ET0(Tmax, Tmin, RHmean, u2, Rs):
-    # Calculation remains the same but vectorized for pandas
-    es = 0.6108 * (np.exp((17.27 * Tmax) / (Tmax + 237.3)) + np.exp((17.27 * Tmin) / (Tmin + 237.3))) / 2
-    ea = es * RHmean / 100
-    Rn = Rs * 0.408
-    Tmean = (Tmax + Tmin) / 2
-    delta = 4098 * es / ((Tmean + 237.3) ** 2)
-    gamma = 0.665 * 101.3 / 1000
-    ET0 = (0.408 * delta * Rn + gamma * Cn * u2 * (es - ea) / (Tmean + 273)) / (delta + gamma * (1 + Cd * u2))
-    return ET0
+        # Growth stages with fertilizer recommendations for sugarcane
+        self.growth_stages = {
+            "Planting": {"days": (0, 30), "NPK_ratio": (20, 40, 10), "biofertilizer": True},
+            "Tillering": {"days": (31, 90), "NPK_ratio": (100, 30, 50), "biofertilizer": True},
+            "Grand Growth": {"days": (91, 210), "NPK_ratio": (100, 35, 55), "biofertilizer": True},
+            "Maturity": {"days": (211, 365), "NPK_ratio": (0, 0, 0)},
+            "Harvesting": {"days": (366, 380), "NPK_ratio": (0, 0, 0)}
+        }
 
-def calculate_daily_irrigation_requirement(ET0, effective_precipitation):
-    ETa = Kc * ET0
-    return (ETa - effective_precipitation) / Eff
+        # NPK complex fertilizers and individual fertilizers
+        self.fertilizers = {
+            "10:26:26": {"N": 0.10, "P": 0.26, "K": 0.26},
+            "12:32:16": {"N": 0.12, "P": 0.32, "K": 0.16},
+            "15:15:15": {"N": 0.15, "P": 0.15, "K": 0.15},
+            "Urea (46-0-0)": {"N": 0.46, "P": 0.0, "K": 0.0},
+            "DAP (18-46-0)": {"N": 0.18, "P": 0.46, "K": 0.0},
+            "MOP (0-0-60)": {"N": 0.0, "P": 0.0, "K": 0.60},
+            "Ammonium Sulfate (21-0-0)": {"N": 0.21, "P": 0.0, "K": 0.0},
+            "CAN (26-0-0)": {"N": 0.26, "P": 0.0, "K": 0.0},
+            "SSP (0-16-0)": {"N": 0.0, "P": 0.16, "K": 0.0},
+            "TSP (0-44-0)": {"N": 0.0, "P": 0.44, "K": 0.0},
+            "SOP (0-0-50)": {"N": 0.0, "P": 0.0, "K": 0.50},
+        }
 
-async def calculate_irrigation_past_year(location: str):
-    # Generate all dates
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
-    dates = [(start_date + timedelta(days=x)).strftime('%Y-%m-%d') 
-             for x in range((end_date - start_date).days + 1)]
-    
-    # Create batches of dates (to avoid overwhelming the API)
-    BATCH_SIZE = 20
-    date_batches = [dates[i:i + BATCH_SIZE] for i in range(0, len(dates), BATCH_SIZE)]
-    
-    all_weather_data = []
-    async with aiohttp.ClientSession() as session:
-        for batch in date_batches:
-            batch_data = await fetch_weather_data_batch(session, location, batch)
-            all_weather_data.extend(batch_data)
-    
-    # Process all data at once using pandas
-    records = []
-    for date, weather in zip(dates, all_weather_data):
-        day_data = weather['forecast']['forecastday'][0]
-        records.append({
-            'date': date,
-            'Tmax': day_data['day']['maxtemp_c'],
-            'Tmin': day_data['day']['mintemp_c'],
-            'RHmean': day_data['day']['avghumidity'],
-            'u2': day_data['day']['maxwind_kph'] * 1000 / 3600,
-            'Rs': day_data['day']['uv'],
-            'precipitation': day_data['day']['totalprecip_mm']
-        })
-    
-    # Convert to DataFrame for vectorized operations
-    df = pd.DataFrame(records)
-    
-    # Calculate irrigation requirements in vectorized form
-    df['ET0'] = calculate_ET0(
-        df['Tmax'], df['Tmin'], df['RHmean'], df['u2'], df['Rs']
-    )
-    df['irrigation_mm'] = calculate_daily_irrigation_requirement(
-        df['ET0'], df['precipitation']
-    )
-    df['irrigation_L_per_ha'] = df['irrigation_mm'] * 10000
-    
-    # Format results
-    results = []
-    for _, row in df.iterrows():
-        if row['irrigation_mm'] < 0:
-            results.append(f"{row['date']}: No irrigation needed (Excess moisture)")
-        else:
-            results.append(f"{row['date']}: {row['irrigation_L_per_ha']:.2f} L/ha")
-    
-    return results
+        # Micronutrient management
+        self.micronutrients = {
+            "Zinc sulphate": {"dose": 37.5, "condition": "zinc_deficient"},
+            "Ferrous sulphate": {"dose": 100, "condition": "iron_deficient"},
+            "Copper sulphate": {"dose": 5, "condition": "copper_deficient"}
+        }
 
-def run_irrigation_calculation(location: str):
-    """Wrapper function to handle async execution"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(calculate_irrigation_past_year(location))
+    def _initialize_fuzzy_system(self):
+        # Define fuzzy variables
+        self.n_needed = ctrl.Antecedent(np.arange(0, 301, 1), 'n_needed')
+        self.p_needed = ctrl.Antecedent(np.arange(0, 201, 1), 'p_needed')
+        self.k_needed = ctrl.Antecedent(np.arange(0, 201, 1), 'k_needed')
 
-if __name__ == "__main__":
-    # Install required packages if not already installed
-    try:
-        import nest_asyncio
-    except ImportError:
-        print("Installing required packages...")
-        import subprocess
-        subprocess.check_call(['pip', 'install', 'nest_asyncio', 'aiohttp', 'pandas', 'numpy'])
-        import nest_asyncio
-    
-    # Run the calculation
-    results = run_irrigation_calculation(LOCATION)
-    
-    print("Daily irrigation water requirements (L/ha) for each day in the past year:")
-    for result in results:
-        print(result)
+        self.n_fertilizer = ctrl.Consequent(np.arange(0, 301, 1), 'n_fertilizer')
+        self.p_fertilizer = ctrl.Consequent(np.arange(0, 101, 1), 'p_fertilizer')
+        self.k_fertilizer = ctrl.Consequent(np.arange(0, 201, 1), 'k_fertilizer')
+
+        # Membership functions for inputs (N, P, K needs)
+        self.n_needed['low'] = fuzz.trimf(self.n_needed.universe, [0, 0, 150])
+        self.n_needed['medium'] = fuzz.trimf(self.n_needed.universe, [100, 150, 200])
+        self.n_needed['high'] = fuzz.trimf(self.n_needed.universe, [150, 300, 300])
+
+        self.p_needed['low'] = fuzz.trimf(self.p_needed.universe, [0, 0, 50])
+        self.p_needed['medium'] = fuzz.trimf(self.p_needed.universe, [30, 50, 80])
+        self.p_needed['high'] = fuzz.trimf(self.p_needed.universe, [50, 100, 100])
+
+        self.k_needed['low'] = fuzz.trimf(self.k_needed.universe, [0, 0, 100])
+        self.k_needed['medium'] = fuzz.trimf(self.k_needed.universe, [50, 100, 150])
+        self.k_needed['high'] = fuzz.trimf(self.k_needed.universe, [100, 200, 200])
+
+        # Membership functions for outputs (fertilizer)
+        self.n_fertilizer['low'] = fuzz.trimf(self.n_fertilizer.universe, [0, 0, 100])
+        self.n_fertilizer['medium'] = fuzz.trimf(self.n_fertilizer.universe, [50, 150, 250])
+        self.n_fertilizer['high'] = fuzz.trimf(self.n_fertilizer.universe, [150, 300, 300])
+
+        self.p_fertilizer['low'] = fuzz.trimf(self.p_fertilizer.universe, [0, 0, 40])
+        self.p_fertilizer['medium'] = fuzz.trimf(self.p_fertilizer.universe, [20, 50, 70])
+        self.p_fertilizer['high'] = fuzz.trimf(self.p_fertilizer.universe, [50, 100, 100])
+
+        self.k_fertilizer['low'] = fuzz.trimf(self.k_fertilizer.universe, [0, 0, 50])
+        self.k_fertilizer['medium'] = fuzz.trimf(self.k_fertilizer.universe, [30, 100, 150])
+        self.k_fertilizer['high'] = fuzz.trimf(self.k_fertilizer.universe, [100, 200, 200])
+
+        # Define fuzzy rules
+        self.rules = [
+            ctrl.Rule(self.n_needed['low'] & self.p_needed['low'] & self.k_needed['low'],
+                      (self.n_fertilizer['low'], self.p_fertilizer['low'], self.k_fertilizer['low'])),
+            ctrl.Rule(self.n_needed['medium'] & self.p_needed['medium'] & self.k_needed['medium'],
+                      (self.n_fertilizer['medium'], self.p_fertilizer['medium'], self.k_fertilizer['medium'])),
+            ctrl.Rule(self.n_needed['high'] & self.p_needed['high'] & self.k_needed['high'],
+                      (self.n_fertilizer['high'], self.p_fertilizer['high'], self.k_fertilizer['high'])),
+        ]
+
+        # Create control system
+        self.fertilizer_ctrl = ctrl.ControlSystem(self.rules)
+        self.fertilizer_sim = ctrl.ControlSystemSimulation(self.fertilizer_ctrl)
+
+    def fuzzy_logic(self, growth_stage):
+        # Get NPK needs based on growth stage
+        n_needed_target, p_needed_target, k_needed_target = self.get_npk_needs(growth_stage)
+
+        # Fuzzy logic to calculate fertilizer required
+        n_needed = max(0, n_needed_target - self.soil_n)
+        p_needed = max(0, p_needed_target - self.soil_p)
+        k_needed = max(0, k_needed_target - self.soil_k)
+
+        # Adjust the NPK needs based on the difference between the current and ideal soil NPK levels
+        n_fertilizer_needed = n_needed * (1 - (self.soil_n / self.ideal_soil_n))
+        p_fertilizer_needed = p_needed * (1 - (self.soil_p / self.ideal_soil_p))
+        k_fertilizer_needed = k_needed * (1 - (self.soil_k / self.ideal_soil_k))
+
+        # Set inputs to the fuzzy logic system
+        self.fertilizer_sim.input['n_needed'] = n_fertilizer_needed
+        self.fertilizer_sim.input['p_needed'] = p_fertilizer_needed
+        self.fertilizer_sim.input['k_needed'] = k_fertilizer_needed
+
+        # Compute the fuzzy logic output
+        self.fertilizer_sim.compute()
+
+        # Get the fertilizer amounts needed
+        n_fertilizer_needed = self.fertilizer_sim.output['n_fertilizer']
+        p_fertilizer_needed = self.fertilizer_sim.output['p_fertilizer']
+        k_fertilizer_needed = self.fertilizer_sim.output['k_fertilizer']
+
+        return n_fertilizer_needed, p_fertilizer_needed, k_fertilizer_needed
+
+    def get_npk_needs(self, growth_stage):
+        # Get the NPK needs based on the growth stage
+        n_ratio, p_ratio, k_ratio = self.growth_stages[growth_stage]['NPK_ratio']
+        return n_ratio, p_ratio, k_ratio
+
+    def calculate_fertilizer_amounts(self, n_fertilizer_needed, p_fertilizer_needed, k_fertilizer_needed):
+        amounts = {}
+        total_n_applied = total_p_applied = total_k_applied = 0
+
+        # Count available fertilizers with N, P, and K to distribute evenly
+        n_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["N"] > 0]
+        p_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["P"] > 0]
+        k_fertilizers = [fert for fert, nutr in self.fertilizers.items() if nutr["K"] > 0]
+
+        # Distribute N evenly across all nitrogen-heavy and balanced fertilizers
+        for fertilizer in n_fertilizers:
+            n_content = self.fertilizers[fertilizer]["N"]
+            n_share = n_fertilizer_needed / len(n_fertilizers)  # Split nitrogen need evenly
+            n_amount = n_share / n_content if n_content > 0 else 0
+            amounts[fertilizer] = amounts.get(fertilizer, 0) + n_amount
+            total_n_applied += n_amount * n_content
+
+        # Distribute P evenly across all phosphorus-heavy and balanced fertilizers
+        for fertilizer in p_fertilizers:
+            p_content = self.fertilizers[fertilizer]["P"]
+            p_share = p_fertilizer_needed / len(p_fertilizers)  # Split phosphorus need evenly
+            p_amount = p_share / p_content if p_content > 0 else 0
+            amounts[fertilizer] = amounts.get(fertilizer, 0) + p_amount
+            total_p_applied += p_amount * p_content
+
+        # Distribute K evenly across all potassium-heavy and balanced fertilizers
+        for fertilizer in k_fertilizers:
+            k_content = self.fertilizers[fertilizer]["K"]
+            k_share = k_fertilizer_needed / len(k_fertilizers)  # Split potassium need evenly
+            k_amount = k_share / k_content if k_content > 0 else 0
+            amounts[fertilizer] = amounts.get(fertilizer, 0) + k_amount
+            total_k_applied += k_amount * k_content
+
+        # Rebalance amounts across all fertilizers
+        return amounts
+
+    def display_fertilizer_plan(self):
+    # Initialize a list to store fertilizer plans for each growth stage
+         fertilizer_plan_list = []
+     
+         print(f"\nFertilizer plan for {self.crop_name}:")
+         for phase, stage_data in self.growth_stages.items():
+             # Get fertilizer amounts using fuzzy logic
+             n_fertilizer, p_fertilizer, k_fertilizer = self.fuzzy_logic(phase)
+             fertilizer_amounts = self.calculate_fertilizer_amounts(n_fertilizer, p_fertilizer, k_fertilizer)
+     
+             # Display the data
+             print(f"{phase} (Days: {stage_data['days'][0]} to {stage_data['days'][1]}):")
+             print(f"  N fertilizer ratio: {stage_data['NPK_ratio'][0]}%")
+             print(f"  P fertilizer ratio: {stage_data['NPK_ratio'][1]}%")
+             print(f"  K fertilizer ratio: {stage_data['NPK_ratio'][2]}%")
+     
+             # Check if any fertilizer is needed
+             if stage_data['NPK_ratio'][0] > 0 or stage_data['NPK_ratio'][1] > 0 or stage_data['NPK_ratio'][2] > 0:
+                 print(f"  N fertilizer needed: {n_fertilizer:.2f} kg/ha")
+                 print(f"  P fertilizer needed: {p_fertilizer:.2f} kg/ha")
+                 print(f"  K fertilizer needed: {k_fertilizer:.2f} kg/ha")
+     
+                 for fertilizer, amount in fertilizer_amounts.items():
+                     print(f"    {fertilizer}: {amount:.2f} kg/ha")
+             else:
+                 print("  No fertilizer required.")
+     
+             print()
+     
+             # Store the data for this phase in a dictionary
+             phase_data = {
+                 'phase': phase,
+                 'days': stage_data['days'],
+                 'n_fertilizer_needed': n_fertilizer,
+                 'p_fertilizer_needed': p_fertilizer,
+                 'k_fertilizer_needed': k_fertilizer,
+                 'specific_fertilizer_amounts': fertilizer_amounts  # Dictionary with the specific fertilizer amounts
+             }
+     
+             # Append the dictionary to the list, even if no fertilizer is required
+             fertilizer_plan_list.append(phase_data)
+         print(fertilizer_plan_list)
+         # Return the list containing all phases' data
+         return fertilizer_plan_list
+# Example of the update in action:
+fertilizer_calculator = NPKComplexFertilizerCalculator(
+    crop_name="Wheat", soil_npk_ratio=(0.1, 0.05, 0.12), ideal_soil_npk_ratio=(1.0, 0.067, 0.25)
+)
+
+fertilizer_calculator.display_fertilizer_plan()
